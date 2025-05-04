@@ -1,0 +1,279 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Infraestructura para API REST de empleados (Java)'
+
+Resources:
+  # DynamoDB Tables
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Users
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: username
+          AttributeType: S
+      KeySchema:
+        - AttributeName: username
+          KeyType: HASH
+
+  TokensTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Tokens
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: token
+          AttributeType: S
+      KeySchema:
+        - AttributeName: token
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+
+  EmployeesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Employees
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+
+  # IAM Role for Lambda functions
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                Resource:
+                  - !GetAtt UsersTable.Arn
+                  - !GetAtt TokensTable.Arn
+                  - !GetAtt EmployeesTable.Arn
+
+  # Lambda Functions
+  LoginFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: login-function
+      Runtime: java17
+      Handler: com.api.handlers.LoginHandler::handleRequest
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 512
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      Environment:
+        Variables:
+          JAVA_TOOL_OPTIONS: -XX:+TieredCompilation -XX:TieredStopAtLevel=1
+
+  CreateUpdateEmployeeFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: create-update-employee-function
+      Runtime: java17
+      Handler: com.api.handlers.CreateUpdateEmployeeHandler::handleRequest
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 512
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      Environment:
+        Variables:
+          JAVA_TOOL_OPTIONS: -XX:+TieredCompilation -XX:TieredStopAtLevel=1
+
+  GetAllEmployeesFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: get-all-employees-function
+      Runtime: java17
+      Handler: com.api.handlers.GetAllEmployeesHandler::handleRequest
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 512
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      Environment:
+        Variables:
+          JAVA_TOOL_OPTIONS: -XX:+TieredCompilation -XX:TieredStopAtLevel=1
+
+  GetEmployeeByIdFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: get-employee-by-id-function
+      Runtime: java17
+      Handler: com.api.handlers.GetEmployeeByIdHandler::handleRequest
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 512
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      Environment:
+        Variables:
+          JAVA_TOOL_OPTIONS: -XX:+TieredCompilation -XX:TieredStopAtLevel=1
+
+  # API Gateway
+  EmployeesApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: EmployeesAPI
+      Description: API para gestión de empleados
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  # API Gateway Resources
+  LoginResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref EmployeesApi
+      ParentId: !GetAtt EmployeesApi.RootResourceId
+      PathPart: login
+
+  EmployeesResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref EmployeesApi
+      ParentId: !GetAtt EmployeesApi.RootResourceId
+      PathPart: employees
+
+  EmployeeIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref EmployeesApi
+      ParentId: !Ref EmployeesResource
+      PathPart: '{id}'
+
+  # API Gateway Methods
+  LoginMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref EmployeesApi
+      ResourceId: !Ref LoginResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LoginFunction.Arn}/invocations
+
+  CreateUpdateEmployeeMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref EmployeesApi
+      ResourceId: !Ref EmployeesResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CreateUpdateEmployeeFunction.Arn}/invocations
+
+  GetAllEmployeesMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref EmployeesApi
+      ResourceId: !Ref EmployeesResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetAllEmployeesFunction.Arn}/invocations
+
+  GetEmployeeByIdMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref EmployeesApi
+      ResourceId: !Ref EmployeeIdResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetEmployeeByIdFunction.Arn}/invocations
+
+  # Deployment
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - LoginMethod
+      - CreateUpdateEmployeeMethod
+      - GetAllEmployeesMethod
+      - GetEmployeeByIdMethod
+    Properties:
+      RestApiId: !Ref EmployeesApi
+      StageName: prod
+
+  # Lambda Permissions
+  LoginPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LoginFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${EmployeesApi}/*/POST/login
+
+  CreateUpdateEmployeePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref CreateUpdateEmployeeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${EmployeesApi}/*/POST/employees
+
+  GetAllEmployeesPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref GetAllEmployeesFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${EmployeesApi}/*/GET/employees
+
+  GetEmployeeByIdPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref GetEmployeeByIdFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${EmployeesApi}/*/GET/employees/{id}
+
+Parameters:
+  LambdaCodeS3Bucket:
+    Type: String
+    Description: Nombre del bucket S3 donde se encuentra el código Lambda
+
+  LambdaCodeS3Key:
+    Type: String
+    Description: Clave S3 del archivo JAR con el código Lambda
+
+Outputs:
+  ApiEndpoint:
+    Description: URL de la API
+    Value: !Sub https://${EmployeesApi}.execute-api.${AWS::Region}.amazonaws.com/prod
